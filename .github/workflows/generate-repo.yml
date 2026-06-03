@@ -1,0 +1,115 @@
+name: Generate Repo Index
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Checkout (ou criar) branch repo
+        uses: actions/checkout@v4
+        with:
+          ref: repo
+          path: repo-branch
+        continue-on-error: true
+
+      - name: Criar branch repo se não existir
+        run: |
+          if [ ! -d "repo-branch/.git" ]; then
+            mkdir -p repo-branch
+            cd repo-branch
+            git init
+            git remote add origin https://github.com/${{ github.repository }}.git
+            git checkout --orphan repo
+          fi
+
+      - name: Baixar APK do release mais recente
+        id: download
+        run: |
+          RELEASE_JSON=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest)
+          APK_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url')
+          APK_NAME=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith(".apk")) | .name')
+          TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
+          
+          echo "apk_url=$APK_URL" >> $GITHUB_OUTPUT
+          echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          
+          mkdir -p repo-branch/apk
+          curl -L "$APK_URL" -o "repo-branch/apk/$APK_NAME"
+
+      - name: Extrair metadados do APK
+        id: meta
+        run: |
+          APK_PATH="repo-branch/apk/${{ steps.download.outputs.apk_name }}"
+          
+          # Instalar aapt
+          sudo apt-get install -y aapt
+          
+          AAPT_OUT=$(aapt dump badging "$APK_PATH" 2>/dev/null || true)
+          
+          PKG=$(echo "$AAPT_OUT" | grep "^package:" | sed "s/.*name='\([^']*\)'.*/\1/")
+          VERSION_CODE=$(echo "$AAPT_OUT" | grep "^package:" | sed "s/.*versionCode='\([^']*\)'.*/\1/")
+          VERSION_NAME=$(echo "$AAPT_OUT" | grep "^package:" | sed "s/.*versionName='\([^']*\)'.*/\1/")
+          APP_LABEL=$(echo "$AAPT_OUT" | grep "application-label:" | sed "s/application-label:'\([^']*\)'.*/\1/" | head -1)
+          
+          echo "pkg=$PKG" >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "app_label=$APP_LABEL" >> $GITHUB_OUTPUT
+
+      - name: Gerar index.json e index.min.json
+        run: |
+          APK_NAME="${{ steps.download.outputs.apk_name }}"
+          PKG="${{ steps.meta.outputs.pkg }}"
+          VERSION_CODE="${{ steps.meta.outputs.version_code }}"
+          VERSION_NAME="${{ steps.meta.outputs.version_name }}"
+          APP_LABEL="${{ steps.meta.outputs.app_label }}"
+
+          # Monta o JSON (adapte sources conforme sua extensão)
+          cat > repo-branch/index.json <<EOF
+          [
+            {
+              "name": "$APP_LABEL",
+              "pkg": "$PKG",
+              "apk": "$APK_NAME",
+              "lang": "pt-BR",
+              "code": $VERSION_CODE,
+              "version": "$VERSION_NAME",
+              "nsfw": 0,
+              "sources": [
+                {
+                  "name": "Dattebayo BR",
+                  "lang": "pt-BR",
+                  "id": "dattebayobr",
+                  "baseUrl": "https://www.dattebayo-br.com"
+                }
+              ]
+            }
+          ]
+          EOF
+
+          # Minifica
+          cat repo-branch/index.json | jq -c '.' > repo-branch/index.min.json
+
+      - name: Publicar na branch repo
+        run: |
+          cd repo-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add .
+          git diff --staged --quiet || git commit -m "repo: update index for ${{ steps.download.outputs.tag }}"
+          
+          git push origin HEAD:repo --force
