@@ -37,33 +37,35 @@ jobs:
       - name: Baixar APK do release mais recente
         id: download
         run: |
-          RELEASE_JSON=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest)
-          APK_URL=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url')
-          APK_NAME=$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith(".apk")) | .name')
-          TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
-          
-          echo "apk_url=$APK_URL" >> $GITHUB_OUTPUT
+          TAG=$(gh release view --json tagName --jq '.tagName' 2>/dev/null || echo "")
+          if [ -z "$TAG" ]; then
+            echo "Nenhum release encontrado. Execute o workflow de release primeiro."
+            exit 1
+          fi
+          gh release download "$TAG" --pattern "*.apk" --dir repo-branch/apk
+          APK_NAME=$(ls repo-branch/apk/*.apk 2>/dev/null | head -1 | xargs basename)
           echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-          
-          mkdir -p repo-branch/apk
-          curl -L "$APK_URL" -o "repo-branch/apk/$APK_NAME"
 
       - name: Extrair metadados do APK
         id: meta
         run: |
           APK_PATH="repo-branch/apk/${{ steps.download.outputs.apk_name }}"
-          
-          # Instalar aapt
-          sudo apt-get install -y aapt
-          
-          AAPT_OUT=$(aapt dump badging "$APK_PATH" 2>/dev/null || true)
-          
-          PKG=$(echo "$AAPT_OUT" | grep "^package:" | sed "s/.*name='\([^']*\)'.*/\1/")
-          VERSION_CODE=$(echo "$AAPT_OUT" | grep "^package:" | sed "s/.*versionCode='\([^']*\)'.*/\1/")
-          VERSION_NAME=$(echo "$AAPT_OUT" | grep "^package:" | sed "s/.*versionName='\([^']*\)'.*/\1/")
-          APP_LABEL=$(echo "$AAPT_OUT" | grep "application-label:" | sed "s/application-label:'\([^']*\)'.*/\1/" | head -1)
-          
+
+          # aapt2 vem com o Android SDK pré-instalado no runner
+          AAPT2="${ANDROID_SDK_ROOT}/build-tools/*/aapt2"
+          AAPT2=$(echo $AAPT2 | tr ' ' '\n' | sort -V | tail -1)
+
+          # Extrai o package name do AndroidManifest.xml
+          $AAPT2 dump packagename "$APK_PATH" > /tmp/pkg.txt 2>/dev/null
+          PKG=$(cat /tmp/pkg.txt)
+
+          # Extrai versionCode e versionName
+          $AAPT2 dump badging "$APK_PATH" 2>/dev/null > /tmp/badging.txt || true
+          VERSION_CODE=$(grep "^package:" /tmp/badging.txt | sed "s/.*versionCode='\([^']*\)'.*/\1/")
+          VERSION_NAME=$(grep "^package:" /tmp/badging.txt | sed "s/.*versionName='\([^']*\)'.*/\1/")
+          APP_LABEL=$(grep "application-label:" /tmp/badging.txt | sed "s/application-label:'\([^']*\)'.*/\1/" | head -1)
+
           echo "pkg=$PKG" >> $GITHUB_OUTPUT
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
@@ -77,7 +79,6 @@ jobs:
           VERSION_NAME="${{ steps.meta.outputs.version_name }}"
           APP_LABEL="${{ steps.meta.outputs.app_label }}"
 
-          # Monta o JSON (adapte sources conforme sua extensão)
           cat > repo-branch/index.json <<EOF
           [
             {
@@ -100,16 +101,15 @@ jobs:
           ]
           EOF
 
-          # Minifica
-          cat repo-branch/index.json | jq -c '.' > repo-branch/index.min.json
+          jq -c '.' < repo-branch/index.json > repo-branch/index.min.json
 
       - name: Publicar na branch repo
         run: |
           cd repo-branch
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           git add .
           git diff --staged --quiet || git commit -m "repo: update index for ${{ steps.download.outputs.tag }}"
-          
+
           git push origin HEAD:repo --force
