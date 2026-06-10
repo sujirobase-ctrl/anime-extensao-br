@@ -1,12 +1,18 @@
-# anime-extensao-br
+ # anime-extensao-br
 
 Extensão Aniyomi / Dantotsu para o site **[Dattebayo BR](https://www.dattebayo-br.com)**, em português brasileiro.
 
+[![CI](https://github.com/ZakiSCzip/anime-extensao-br/actions/workflows/build.yml/badge.svg)](https://github.com/ZakiSCzip/anime-extensao-br/actions/workflows/build.yml)
+
 ## Instalar
 
-A maneira mais simples é baixar o `.apk` mais recente do menu **[Releases](../../releases)** e instalá-lo no Android (é preciso permitir instalação de fontes desconhecidas).
+A maneira mais simples é baixar o `.apk` mais recente do **[Releases](https://github.com/ZakiSCzip/anime-extensao-br/releases)** e instalá-lo no Android (é preciso permitir instalação de fontes desconhecidas).
 
-Funciona tanto no [Aniyomi](https://github.com/aniyomiorg/aniyomi) quanto em forks do [Dantotsu](https://github.com/rebelonion/Dantotsu) que carregam extensões do Aniyomi (ex: [itsmechinmoy/dantotsu-updater](https://github.com/itsmechinmoy/dantotsu-updater)).
+Também é possível adicionar o repositório da **branch `repo`** em apps compatíveis com o formato Dantotsu:
+
+```
+https://raw.githubusercontent.com/ZakiSCzip/anime-extensao-br/repo/index.min.json
+```
 
 ## O que essa extensão faz
 
@@ -47,7 +53,8 @@ keyPassword=...
    git push origin v14.11
    ```
 
-O workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) vai buildar, assinar e anexar o APK ao release automaticamente.
+O workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) vai buildar, assinar e anexar o APK ao release automaticamente.  
+Na sequência, o workflow [`.github/workflows/generate-repo.yml`](.github/workflows/generate-repo.yml) atualiza o índice na branch `repo`.
 
 ## Estrutura
 
@@ -61,9 +68,12 @@ O workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) vai 
 │       └── DattebayoBR.kt                     # Implementação da extensão
 ├── buildSrc/                                  # Plugin Gradle convencional do Aniyomi
 ├── gradle/libs.versions.toml                  # Catálogo de versões (Aniyomi-lib, OkHttp, JSoup…)
-└── .github/workflows/
-    ├── build.yml                              # Build em todo push / PR
-    └── release.yml                            # Release em tag `v*.*`
+├── .github/
+│   └── workflows/
+│       ├── build.yml                          # Build em todo push / PR
+│       ├── release.yml                        # Release em tag `v*.*`
+│       └── generate-repo.yml                  # Gera índice na branch `repo`
+└── .gitattributes                             # Normalização de line endings
 ```
 
 ## Licença

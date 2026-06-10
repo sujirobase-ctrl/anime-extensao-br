@@ -17,6 +17,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import rx.Observable
 import java.net.URLEncoder
@@ -325,48 +326,63 @@ class DattebayoBR : AnimeHttpSource() {
 
     // ============================== Videos ===============================
 
-    // v14.10: two important behaviour fixes vs v14.9:
-    //   1) Quality strings carry a resolution number ("FULLHD 1080p" / "HD 720p" / "SD 480p").
-    //      Dantotsu's AniyomiAdapter parses quality with Regex("\\d+") to assign a quality int;
-    //      "SD"/"HD"/"FULLHD" all parse to 0, which makes Dantotsu treat them as identical and
-    //      collapse them in its player UI. Embedding 480/720/1080 makes Dantotsu see three
-    //      distinct quality levels.
-    //   2) Qualities are NEVER silently dropped when ads.animeyabu.net fails. Before, a single
-    //      failed ads call removed that quality from the list, so the cached "selected" server
-    //      name (e.g. "FULLHD") could fail to find a match between episodes — which is the path
-    //      that produced the SelectorDialogFragment NPE in Dantotsu's filter/find. Now we always
-    //      emit all qualities present in the page; if a suffix is missing we fall back to the
-    //      raw vid URL. The R2 backend will refuse playback on the raw URL, but the slot stays
-    //      consistent across episodes and Dantotsu's selector doesn't crash.
-    //
-    //  Also: small retry-with-jitter on the ads endpoint to mask transient rate limiting.
     override fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
-        val out = ArrayList<Video>()
         val httpUrl = response.request.url.toString()
+        val tabs = document.select("div.AbasBox div.Aba")
 
-        for (element in document.select("div.AbasBox div.Aba")) {
-            val attr = element.attr("aba-type")
-            val rawTabName = element.text().trim()
-            if (rawTabName.isBlank()) continue
-            val container = document.getElementById(attr) ?: continue
-            val script = container.selectFirst("script")?.data().orEmpty()
-            val rawVideoUrl = VID_REGEX.find(script)?.groupValues?.getOrNull(1) ?: continue
-            if (rawVideoUrl.isBlank()) continue
+        val videos = mutableListOf<Video>()
+        for (tab in tabs) {
+            val name = tab.text().trim().uppercase(Locale.ROOT)
+            val keep = "FULLHD" in name || "FULL HD" in name || "1080" in name ||
+                "HD" in name || "720" in name
+            if (!keep) continue
 
-            val adsHeaders = headersBuilder()
-                .add("Referer", httpUrl)
-                .add("Origin", baseUrl)
-                .build()
+            val video = extractVideo(tab, document, httpUrl) ?: continue
+            videos.add(video)
+        }
+        return videos
+    }
 
-            val suffix = resolveAdsSuffix(rawVideoUrl, adsHeaders, rawTabName)
-            val finalUrl = if (suffix.isNullOrBlank()) rawVideoUrl else (rawVideoUrl + suffix)
-            val qualityLabel = decorateQualityLabel(rawTabName)
+    private fun extractVideo(tab: Element, document: Document, httpUrl: String): Video? {
+        val attr = tab.attr("aba-type")
+        val rawTabName = tab.text().trim()
+        val container = document.getElementById(attr) ?: return null
 
-            out.add(buildVideo(finalUrl, qualityLabel, adsHeaders))
+        val rawVideoUrl = findVideoUrl(container) ?: return null
+
+        val adsHeaders = headersBuilder()
+            .add("Referer", httpUrl)
+            .add("Origin", baseUrl)
+            .build()
+
+        var finalUrl = rawVideoUrl
+        if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
+
+        if (AUTH_PARAMS_REGEX.containsMatchIn(finalUrl)) {
+            return buildVideo(finalUrl, decorateQualityLabel(rawTabName), adsHeaders)
         }
 
-        return out.sortedByDescending { qualityRank(it.quality) }
+        val suffix = resolveAdsSuffix(rawVideoUrl, adsHeaders, rawTabName)
+        if (!suffix.isNullOrBlank()) finalUrl = rawVideoUrl + suffix
+        if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
+
+        return buildVideo(finalUrl, decorateQualityLabel(rawTabName), adsHeaders)
+    }
+
+    private fun findVideoUrl(root: Element): String? {
+        val script = root.selectFirst("script")?.data().orEmpty()
+        var match = VID_REGEX.find(script)
+        if (match != null) return match.groupValues[1].takeUnless { it.isBlank() }
+
+        match = VID_REGEX2.find(script)
+        if (match != null) return match.groupValues[1].takeUnless { it.isBlank() }
+
+        val source = root.select("video source[src], source[src]").firstOrNull()
+            ?.attr("src")?.takeUnless { it.isBlank() }
+        if (source != null) return source
+
+        return null
     }
 
     // Construct a Video using the legacy 5-arg constructor for compatibility with the older
@@ -401,7 +417,15 @@ class DattebayoBR : AnimeHttpSource() {
         val adsUrl = "$ADS_ENDPOINT?url=" + URLEncoder.encode(vid, "UTF-8")
         repeat(ADS_MAX_ATTEMPTS) { attempt ->
             try {
-                client.newCall(Request.Builder().url(adsUrl).headers(headers).build()).execute().use { resp ->
+                val fullHeaders = headers.newBuilder()
+                    .add("Referer", baseUrl + "/")
+                    .add("Origin", baseUrl)
+                    .add("Accept", "application/json, text/plain, */*")
+                    .add("Sec-Fetch-Site", "cross-site")
+                    .add("Sec-Fetch-Mode", "cors")
+                    .add("Sec-Fetch-Dest", "empty")
+                    .build()
+                client.newCall(Request.Builder().url(adsUrl).headers(fullHeaders).build()).execute().use { resp ->
                     val str = resp.body?.string().orEmpty()
                     if (str.contains("publicidade")) {
                         val suffix = JSONArray(str).getJSONObject(0).optString("publicidade", "")
@@ -426,18 +450,6 @@ class DattebayoBR : AnimeHttpSource() {
         return null
     }
 
-    // FULLHD > HD > SD by default. Sorting alphabetically ("SD" > "HD" > "FULLHD") was making
-    // SD the default in Dantotsu — that's the first item in the list.
-    private fun qualityRank(quality: String): Int {
-        val q = quality.uppercase(Locale.ROOT)
-        return when {
-            "FULLHD" in q || "FULL HD" in q || "1080" in q -> 3
-            "HD" in q || "720" in q -> 2
-            "SD" in q || "480" in q || "360" in q -> 1
-            else -> 0
-        }
-    }
-
     // ============================== Helpers ==============================
 
     private fun Element.toAnimeCard(): SAnime {
@@ -459,12 +471,14 @@ class DattebayoBR : AnimeHttpSource() {
         private const val SEARCH_TIMEOUT_SECONDS = 15L
 
         private const val ADS_ENDPOINT = "https://ads.animeyabu.net"
-        private const val ADS_MAX_ATTEMPTS = 3
-        private const val ADS_BASE_BACKOFF_MS = 120L
+        private const val ADS_MAX_ATTEMPTS = 5
+        private const val ADS_BASE_BACKOFF_MS = 200L
         private const val ADS_CACHE_SOFT_CAP = 64
 
         private val WHITESPACE = Regex("\\s+")
         private val VID_REGEX = Regex("var vid\\s*=\\s*['\"](.*?)['\"]")
+        private val VID_REGEX2 = Regex("""(?:let|const|window\.)?\s*vid\s*=\s*['"](.*?)['"]""")
+        private val AUTH_PARAMS_REGEX = Regex("""X-Amz-Signature|X-Amz-Credential|X-Amz-Algorithm""")
 
         // Tokens that strongly identify which season a result is for. Examples that this matches:
         // "4", "4th", "3rd", "2nd", "1", "ii", "iii", "iv", "v", "2-nensei", "2-nensei-hen",

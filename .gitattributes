@@ -1,0 +1,21 @@
+* text=auto eol=lf
+
+*.kt text diff=kotlin
+*.kts text diff=kotlin
+*.xml text
+*.yml text
+*.yaml text
+*.json text
+*.md text
+*.gradle text
+*.properties text
+*.toml text
+*.sh text eol=lf
+*.bat text eol=crlf
+.gitattributes text
+
+*.png binary
+*.jpg binary
+*.jks binary
+*.keystore binary
+*.jar binary
