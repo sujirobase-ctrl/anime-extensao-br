@@ -18,7 +18,6 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Element
-import org.jsoup.select.Elements
 import rx.Observable
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
@@ -330,11 +329,10 @@ class DattebayoBR : AnimeHttpSource() {
         val document = response.asJsoup()
         val httpUrl = response.request.url.toString()
 
-        val tabs = document.select("div.AbasBox div.Aba")
-        if (tabs.isEmpty()) return emptyList()
-
-        val tab = pickBestTab(tabs)
-        if (tab == null) return emptyList()
+        val tab = document.select("div.AbasBox div.Aba").firstOrNull { element ->
+            val name = element.text().trim().uppercase(Locale.ROOT)
+            "FULLHD" in name || "FULL HD" in name || "1080" in name
+        } ?: return emptyList()
 
         val attr = tab.attr("aba-type")
         val rawTabName = tab.text().trim()
@@ -353,15 +351,6 @@ class DattebayoBR : AnimeHttpSource() {
         val qualityLabel = decorateQualityLabel(rawTabName)
 
         return listOf(buildVideo(finalUrl, qualityLabel, adsHeaders))
-    }
-
-    // FULLHD > HD > SD > first available
-    private fun pickBestTab(tabs: Elements): Element? {
-        val order = listOf("FULLHD", "FULL HD", "1080", "HD", "720", "SD", "480")
-        for (keyword in order) {
-            tabs.firstOrNull { keyword in it.text().trim().uppercase(Locale.ROOT) }?.let { return it }
-        }
-        return tabs.firstOrNull()
     }
 
     // Construct a Video using the legacy 5-arg constructor for compatibility with the older
