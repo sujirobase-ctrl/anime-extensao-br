@@ -325,48 +325,33 @@ class DattebayoBR : AnimeHttpSource() {
 
     // ============================== Videos ===============================
 
-    // v14.10: two important behaviour fixes vs v14.9:
-    //   1) Quality strings carry a resolution number ("FULLHD 1080p" / "HD 720p" / "SD 480p").
-    //      Dantotsu's AniyomiAdapter parses quality with Regex("\\d+") to assign a quality int;
-    //      "SD"/"HD"/"FULLHD" all parse to 0, which makes Dantotsu treat them as identical and
-    //      collapse them in its player UI. Embedding 480/720/1080 makes Dantotsu see three
-    //      distinct quality levels.
-    //   2) Qualities are NEVER silently dropped when ads.animeyabu.net fails. Before, a single
-    //      failed ads call removed that quality from the list, so the cached "selected" server
-    //      name (e.g. "FULLHD") could fail to find a match between episodes — which is the path
-    //      that produced the SelectorDialogFragment NPE in Dantotsu's filter/find. Now we always
-    //      emit all qualities present in the page; if a suffix is missing we fall back to the
-    //      raw vid URL. The R2 backend will refuse playback on the raw URL, but the slot stays
-    //      consistent across episodes and Dantotsu's selector doesn't crash.
-    //
-    //  Also: small retry-with-jitter on the ads endpoint to mask transient rate limiting.
     override fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
-        val out = ArrayList<Video>()
         val httpUrl = response.request.url.toString()
 
-        for (element in document.select("div.AbasBox div.Aba")) {
-            val attr = element.attr("aba-type")
-            val rawTabName = element.text().trim()
-            if (rawTabName.isBlank()) continue
-            val container = document.getElementById(attr) ?: continue
-            val script = container.selectFirst("script")?.data().orEmpty()
-            val rawVideoUrl = VID_REGEX.find(script)?.groupValues?.getOrNull(1) ?: continue
-            if (rawVideoUrl.isBlank()) continue
+        val tab = document.select("div.AbasBox div.Aba").firstOrNull { element ->
+            val name = element.text().trim().uppercase(Locale.ROOT)
+            "FULLHD" in name || "FULL HD" in name || "1080" in name
+        } ?: document.select("div.AbasBox div.Aba").firstOrNull()
+        if (tab == null) return emptyList()
 
-            val adsHeaders = headersBuilder()
-                .add("Referer", httpUrl)
-                .add("Origin", baseUrl)
-                .build()
+        val attr = tab.attr("aba-type")
+        val rawTabName = tab.text().trim()
+        val container = document.getElementById(attr) ?: return emptyList()
+        val script = container.selectFirst("script")?.data().orEmpty()
+        val rawVideoUrl = VID_REGEX.find(script)?.groupValues?.getOrNull(1) ?: return emptyList()
+        if (rawVideoUrl.isBlank()) return emptyList()
 
-            val suffix = resolveAdsSuffix(rawVideoUrl, adsHeaders, rawTabName)
-            val finalUrl = if (suffix.isNullOrBlank()) rawVideoUrl else (rawVideoUrl + suffix)
-            val qualityLabel = decorateQualityLabel(rawTabName)
+        val adsHeaders = headersBuilder()
+            .add("Referer", httpUrl)
+            .add("Origin", baseUrl)
+            .build()
 
-            out.add(buildVideo(finalUrl, qualityLabel, adsHeaders))
-        }
+        val suffix = resolveAdsSuffix(rawVideoUrl, adsHeaders, rawTabName)
+        val finalUrl = if (suffix.isNullOrBlank()) rawVideoUrl else (rawVideoUrl + suffix)
+        val qualityLabel = decorateQualityLabel(rawTabName)
 
-        return out.sortedByDescending { qualityRank(it.quality) }
+        return listOf(buildVideo(finalUrl, qualityLabel, adsHeaders))
     }
 
     // Construct a Video using the legacy 5-arg constructor for compatibility with the older
@@ -424,18 +409,6 @@ class DattebayoBR : AnimeHttpSource() {
             }
         }
         return null
-    }
-
-    // FULLHD > HD > SD by default. Sorting alphabetically ("SD" > "HD" > "FULLHD") was making
-    // SD the default in Dantotsu — that's the first item in the list.
-    private fun qualityRank(quality: String): Int {
-        val q = quality.uppercase(Locale.ROOT)
-        return when {
-            "FULLHD" in q || "FULL HD" in q || "1080" in q -> 3
-            "HD" in q || "720" in q -> 2
-            "SD" in q || "480" in q || "360" in q -> 1
-            else -> 0
-        }
     }
 
     // ============================== Helpers ==============================
