@@ -385,7 +385,15 @@ class DattebayoBR : AnimeHttpSource() {
         val adsUrl = "$ADS_ENDPOINT?url=" + URLEncoder.encode(vid, "UTF-8")
         repeat(ADS_MAX_ATTEMPTS) { attempt ->
             try {
-                client.newCall(Request.Builder().url(adsUrl).headers(headers).build()).execute().use { resp ->
+                val fullHeaders = headers.newBuilder()
+                    .add("Referer", baseUrl + "/")
+                    .add("Origin", baseUrl)
+                    .add("Accept", "application/json, text/plain, */*")
+                    .add("Sec-Fetch-Site", "cross-site")
+                    .add("Sec-Fetch-Mode", "cors")
+                    .add("Sec-Fetch-Dest", "empty")
+                    .build()
+                client.newCall(Request.Builder().url(adsUrl).headers(fullHeaders).build()).execute().use { resp ->
                     val str = resp.body?.string().orEmpty()
                     if (str.contains("publicidade")) {
                         val suffix = JSONArray(str).getJSONObject(0).optString("publicidade", "")
@@ -431,8 +439,8 @@ class DattebayoBR : AnimeHttpSource() {
         private const val SEARCH_TIMEOUT_SECONDS = 15L
 
         private const val ADS_ENDPOINT = "https://ads.animeyabu.net"
-        private const val ADS_MAX_ATTEMPTS = 3
-        private const val ADS_BASE_BACKOFF_MS = 120L
+        private const val ADS_MAX_ATTEMPTS = 5
+        private const val ADS_BASE_BACKOFF_MS = 200L
         private const val ADS_CACHE_SOFT_CAP = 64
 
         private val WHITESPACE = Regex("\\s+")
