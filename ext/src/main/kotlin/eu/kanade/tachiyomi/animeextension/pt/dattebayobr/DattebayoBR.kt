@@ -346,8 +346,15 @@ class DattebayoBR : AnimeHttpSource() {
             .add("Origin", baseUrl)
             .build()
 
+        var finalUrl = rawVideoUrl
+        if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
+
+        if (AUTH_PARAMS_REGEX.containsMatchIn(finalUrl)) {
+            return listOf(buildVideo(finalUrl, decorateQualityLabel(rawTabName), adsHeaders))
+        }
+
         val suffix = resolveAdsSuffix(rawVideoUrl, adsHeaders, rawTabName)
-        var finalUrl = if (suffix.isNullOrBlank()) rawVideoUrl else (rawVideoUrl + suffix)
+        if (!suffix.isNullOrBlank()) finalUrl = rawVideoUrl + suffix
         if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
         val qualityLabel = decorateQualityLabel(rawTabName)
 
@@ -466,6 +473,7 @@ class DattebayoBR : AnimeHttpSource() {
         private val WHITESPACE = Regex("\\s+")
         private val VID_REGEX = Regex("var vid\\s*=\\s*['\"](.*?)['\"]")
         private val VID_REGEX2 = Regex("""(?:let|const|window\.)?\s*vid\s*=\s*['"](.*?)['"]""")
+        private val AUTH_PARAMS_REGEX = Regex("""X-Amz-Signature|X-Amz-Credential|X-Amz-Algorithm""")
 
         // Tokens that strongly identify which season a result is for. Examples that this matches:
         // "4", "4th", "3rd", "2nd", "1", "ii", "iii", "iv", "v", "2-nensei", "2-nensei-hen",
