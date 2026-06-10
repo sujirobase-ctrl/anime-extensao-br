@@ -11,7 +11,7 @@ plugins {
 // Extension metadata — versionCode is bumped here on each release.
 val extName = "Dattebayo BR"
 val extClass = ".DattebayoBR"
-val extVersionCode = 17
+val extVersionCode = 18
 val extIsNsfw = false
 
 android {

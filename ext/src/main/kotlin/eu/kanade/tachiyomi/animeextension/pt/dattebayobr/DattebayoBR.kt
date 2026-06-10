@@ -17,6 +17,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import rx.Observable
 import java.net.URLEncoder
@@ -328,18 +329,27 @@ class DattebayoBR : AnimeHttpSource() {
     override fun videoListParse(response: Response): List<Video> {
         val document = response.asJsoup()
         val httpUrl = response.request.url.toString()
+        val tabs = document.select("div.AbasBox div.Aba")
 
-        val tab = document.select("div.AbasBox div.Aba").firstOrNull { element ->
-            val name = element.text().trim().uppercase(Locale.ROOT)
-            "FULLHD" in name || "FULL HD" in name || "1080" in name
-        } ?: return emptyList()
+        val videos = mutableListOf<Video>()
+        for (tab in tabs) {
+            val name = tab.text().trim().uppercase(Locale.ROOT)
+            val keep = "FULLHD" in name || "FULL HD" in name || "1080" in name ||
+                "HD" in name || "720" in name
+            if (!keep) continue
 
+            val video = extractVideo(tab, document, httpUrl) ?: continue
+            videos.add(video)
+        }
+        return videos
+    }
+
+    private fun extractVideo(tab: Element, document: Document, httpUrl: String): Video? {
         val attr = tab.attr("aba-type")
         val rawTabName = tab.text().trim()
         val container = document.getElementById(attr)
 
-        val rawVideoUrl = findVideoUrl(container ?: document)
-        if (rawVideoUrl == null) return emptyList()
+        val rawVideoUrl = findVideoUrl(container ?: document) ?: return null
 
         val adsHeaders = headersBuilder()
             .add("Referer", httpUrl)
@@ -350,15 +360,14 @@ class DattebayoBR : AnimeHttpSource() {
         if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
 
         if (AUTH_PARAMS_REGEX.containsMatchIn(finalUrl)) {
-            return listOf(buildVideo(finalUrl, decorateQualityLabel(rawTabName), adsHeaders))
+            return buildVideo(finalUrl, decorateQualityLabel(rawTabName), adsHeaders)
         }
 
         val suffix = resolveAdsSuffix(rawVideoUrl, adsHeaders, rawTabName)
         if (!suffix.isNullOrBlank()) finalUrl = rawVideoUrl + suffix
         if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
-        val qualityLabel = decorateQualityLabel(rawTabName)
 
-        return listOf(buildVideo(finalUrl, qualityLabel, adsHeaders))
+        return buildVideo(finalUrl, decorateQualityLabel(rawTabName), adsHeaders)
     }
 
     private fun findVideoUrl(root: Element): String? {
