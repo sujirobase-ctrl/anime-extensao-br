@@ -1,6 +1,6 @@
 [versions]
 agp_version = "8.2.1"
-coroutines_version = "1.7.1"
+coroutines_version = "1.11.0"
 kotlin_version = "1.8.22"
 serialization_version = "1.5.1"
 
