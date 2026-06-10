@@ -18,31 +18,37 @@ jobs:
           ref: main
 
       - name: Checkout (ou criar) branch repo
-        uses: actions/checkout@v4
-        with:
-          ref: repo
-          path: repo-branch
-        continue-on-error: true
-
-      - name: Criar branch repo se não existir
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ ! -d "repo-branch/.git" ]; then
+          AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          if git ls-remote --exit-code --heads "$AUTH_URL" repo; then
+            git clone --depth 1 -b repo "$AUTH_URL" repo-branch
+          else
             mkdir -p repo-branch
             cd repo-branch
             git init
-            git remote add origin https://github.com/${{ github.repository }}.git
+            git remote add origin "$AUTH_URL"
             git checkout --orphan repo
           fi
 
       - name: Baixar APK do release mais recente
         id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          TAG=$(gh release view --json tagName --jq '.tagName' 2>/dev/null || echo "")
-          if [ -z "$TAG" ]; then
+          TAG=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+            | jq -r '.tag_name // empty')
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
             echo "Nenhum release encontrado. Execute o workflow de release primeiro."
             exit 1
           fi
-          gh release download "$TAG" --pattern "*.apk" --dir repo-branch/apk
+          mkdir -p repo-branch/apk
+          curl -sL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
+            | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' \
+            | while read url; do curl -sL -o "repo-branch/apk/$(basename $url)" "$url"; done
           APK_NAME=$(ls repo-branch/apk/*.apk 2>/dev/null | head -1 | xargs basename)
           echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
@@ -104,11 +110,14 @@ jobs:
           jq -c '.' < repo-branch/index.json > repo-branch/index.min.json
 
       - name: Publicar na branch repo
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           cd repo-branch
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git add .
           git diff --staged --quiet || git commit -m "repo: update index for ${{ steps.download.outputs.tag }}"
 
