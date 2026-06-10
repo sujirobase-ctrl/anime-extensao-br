@@ -336,10 +336,10 @@ class DattebayoBR : AnimeHttpSource() {
 
         val attr = tab.attr("aba-type")
         val rawTabName = tab.text().trim()
-        val container = document.getElementById(attr) ?: return emptyList()
-        val script = container.selectFirst("script")?.data().orEmpty()
-        val rawVideoUrl = VID_REGEX.find(script)?.groupValues?.getOrNull(1) ?: return emptyList()
-        if (rawVideoUrl.isBlank()) return emptyList()
+        val container = document.getElementById(attr)
+
+        val rawVideoUrl = findVideoUrl(container ?: document)
+        if (rawVideoUrl == null) return emptyList()
 
         val adsHeaders = headersBuilder()
             .add("Referer", httpUrl)
@@ -347,10 +347,30 @@ class DattebayoBR : AnimeHttpSource() {
             .build()
 
         val suffix = resolveAdsSuffix(rawVideoUrl, adsHeaders, rawTabName)
-        val finalUrl = if (suffix.isNullOrBlank()) rawVideoUrl else (rawVideoUrl + suffix)
+        var finalUrl = if (suffix.isNullOrBlank()) rawVideoUrl else (rawVideoUrl + suffix)
+        if (finalUrl.startsWith("//")) finalUrl = "https:$finalUrl"
         val qualityLabel = decorateQualityLabel(rawTabName)
 
         return listOf(buildVideo(finalUrl, qualityLabel, adsHeaders))
+    }
+
+    private fun findVideoUrl(root: Element): String? {
+        val allHtml = root.html()
+        var match = VID_REGEX.find(allHtml)
+        if (match != null) return match.groupValues[1].takeUnless { it.isBlank() }
+
+        val allScripts = root.select("script").joinToString("\n") { it.data() }
+        match = VID_REGEX.find(allScripts)
+        if (match != null) return match.groupValues[1].takeUnless { it.isBlank() }
+
+        match = VID_REGEX2.find(allHtml)
+        if (match != null) return match.groupValues[1].takeUnless { it.isBlank() }
+
+        val source = root.select("video source[src], source[src]").firstOrNull()
+            ?.attr("src")?.takeUnless { it.isBlank() }
+        if (source != null) return source
+
+        return null
     }
 
     // Construct a Video using the legacy 5-arg constructor for compatibility with the older
@@ -445,6 +465,7 @@ class DattebayoBR : AnimeHttpSource() {
 
         private val WHITESPACE = Regex("\\s+")
         private val VID_REGEX = Regex("var vid\\s*=\\s*['\"](.*?)['\"]")
+        private val VID_REGEX2 = Regex("""(?:let|const|window\.)?\s*vid\s*=\s*['"](.*?)['"]""")
 
         // Tokens that strongly identify which season a result is for. Examples that this matches:
         // "4", "4th", "3rd", "2nd", "1", "ii", "iii", "iv", "v", "2-nensei", "2-nensei-hen",
