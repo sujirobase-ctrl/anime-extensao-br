@@ -347,9 +347,9 @@ class DattebayoBR : AnimeHttpSource() {
     private fun extractVideo(tab: Element, document: Document, httpUrl: String): Video? {
         val attr = tab.attr("aba-type")
         val rawTabName = tab.text().trim()
-        val container = document.getElementById(attr)
+        val container = document.getElementById(attr) ?: return null
 
-        val rawVideoUrl = findVideoUrl(container ?: document) ?: return null
+        val rawVideoUrl = findVideoUrl(container) ?: return null
 
         val adsHeaders = headersBuilder()
             .add("Referer", httpUrl)
@@ -371,15 +371,11 @@ class DattebayoBR : AnimeHttpSource() {
     }
 
     private fun findVideoUrl(root: Element): String? {
-        val allHtml = root.html()
-        var match = VID_REGEX.find(allHtml)
+        val script = root.selectFirst("script")?.data().orEmpty()
+        var match = VID_REGEX.find(script)
         if (match != null) return match.groupValues[1].takeUnless { it.isBlank() }
 
-        val allScripts = root.select("script").joinToString("\n") { it.data() }
-        match = VID_REGEX.find(allScripts)
-        if (match != null) return match.groupValues[1].takeUnless { it.isBlank() }
-
-        match = VID_REGEX2.find(allHtml)
+        match = VID_REGEX2.find(script)
         if (match != null) return match.groupValues[1].takeUnless { it.isBlank() }
 
         val source = root.select("video source[src], source[src]").firstOrNull()
